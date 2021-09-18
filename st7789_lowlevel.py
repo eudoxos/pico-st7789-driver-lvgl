@@ -91,15 +91,15 @@ ST77XX_COLOR_MODE_16M = const(0x07)
 # https://techatronic.com/st7789-display-pi-pico/
 
 class St7789:
-    def __init__(self, *, cs, dc, bl, spi, width=320, height=240, rotation=1, dma=None):
+    def __init__(self, *, cs, dc, bl, spi, width=320, height=240, rot=1, dma=None):
         self.buf1 = bytearray(1)
         self.buf2 = bytearray(2)
         self.buf4 = bytearray(4)
 
         self.cs,self.dc,self.bl = [(machine.Pin(p,machine.Pin.OUT) if isinstance(p,int) else p) for p in (cs,dc,bl)]
-        self.width = (width if rotation%2 else height)
-        self.height = (height if rotation%2 else width)
-        self.rotation = rotation
+        self.width = (width if rot%2 else height)
+        self.height = (height if rot%2 else width)
+        self.rot = rot
 
         self.dma = dma
         self.spi = spi
@@ -150,7 +150,7 @@ class St7789:
             # out of sleep mode
             (ST7789_SLPOUT, None, 100),     
             # memory access direction
-            (ST7789_MADCTL, bytes([ST77XX_MADCTL_ROTS[self.rotation%4]]), 0),    
+            (ST7789_MADCTL, bytes([ST77XX_MADCTL_ROTS[self.rot%4]]), 0),    
             # RGB565
             (ST7789_COLMOD, bytes([ST77XX_COLOR_MODE_65K | ST77XX_COLOR_MODE_16BIT]), 0 ),
             # front/back porch setting in normal/idle/partial modes; 3rd byte (PSEN) 0x00 = disabled
@@ -215,9 +215,9 @@ if __name__=='__main__':
     LCD_MOSI_PIN=11
     LCD_MISO_PIN=12
         
-    def build_square_buf(w, h):
+    def build_square_buf(w, h, inner=[0x00,0x00]):
         top = b"\xFF\xFF"*w
-        body=(b"\xFF\xFF" + b"\x00\x00"*(w-2) + b"\xFF\xFF")*(h-2)
+        body=(b"\xFF\xFF" + bytes(inner)*(w-2) + b"\xFF\xFF")*(h-2)
         bot = b"\xFF\xFF"*w
         return top + body + bot
         
@@ -233,23 +233,23 @@ if __name__=='__main__':
         )
         dma=rp2_dma.DMA(0)
         #dma=None
-        lcd = St7789(spi=spi,dma=dma,cs=LCD_CS_PIN,dc=LCD_DC_PIN,bl=LCD_BKL_PIN)
-        lcd.clear(0x001F)
+        lcd = St7789(rot=1,spi=spi,dma=dma,cs=LCD_CS_PIN,dc=LCD_DC_PIN,bl=LCD_BKL_PIN)
+        lcd.clear(0x0000)
         
         # 1/4 screen pixels square with white border red backgorund 
-        w, h = 320//2, 240//2
-        bmp = build_square_buf(w, h)
+        w, h = 320//4, 240//4
+        bmp = build_square_buf(w, h, [0x03,0x03])
         
         t0 = time.ticks_us()
-        lcd.blit(100, 100, w, h, bmp)
+        lcd.blit(60, 60, w, h, bmp)
         t1 = time.ticks_us()
 
         print("Maximum FPS @24MHz:", 24e6/(320*240*16)) # FPS = F/(W*H*BPP)
         print("Achieved FPS:", 1/(16*(t1-t0)*1e-6))       # Note: Test only draws 1/16 of the sreen area
         
         print( "Draw TSC calibration pattern")
-        w, h = 10, 10
-        bmp = build_square_buf(w, h)
+        w, h = 15, 15
+        bmp = build_square_buf(w, h, [0x00,0x00])
         lcd.blit(50, 50, w, h, bmp)
         lcd.blit(250, 50, w, h, bmp)
         lcd.blit(250, 200, w, h, bmp)
