@@ -4,9 +4,7 @@ import struct
 import uctypes
 
 from micropython import const
-#import sys
-#sys.path.append('.')
-from rp2_dma import DMA
+import rp2_dma
 
 ST7789_NOP = const(0x00)
 ST7789_SWRESET = const(0x01)
@@ -93,7 +91,7 @@ ST77XX_COLOR_MODE_16M = const(0x07)
 # https://techatronic.com/st7789-display-pi-pico/
 
 class St7789:
-    def __init__(self, *, cs, dc, bl, spi, width=320, height=240, rotation=1):
+    def __init__(self, *, cs, dc, bl, spi, width=320, height=240, rotation=1, dma=None):
         self.buf1 = bytearray(1)
         self.buf2 = bytearray(2)
         self.buf4 = bytearray(4)
@@ -103,8 +101,7 @@ class St7789:
         self.height = (height if rotation%2 else width)
         self.rotation = rotation
 
-        self.dma = DMA(0)
-        #self.spi_init()
+        self.dma = dma
         self.spi = spi
         self.config()
 
@@ -118,9 +115,9 @@ class St7789:
             self.spi.write(buf)
         self.cs.value(1)
 
-    # Note: if is_blocking is False, user should call to wait_dma explicitly
-    def write_register_dma(self, reg, buf, is_blocking=True ):    
-        SPI1_BASE = 0x40040000
+    def write_register_dma(self, reg, buf, is_blocking=True ):
+        'If *is_blocking* is False, used should call wait_dma explicitly.'
+        SPI1_BASE = 0x40040000 # FIXME: will be different for another SPI bus?
         SSPDR     = 0x008
         self.dma.config(
             src_addr = uctypes.addressof(buf),
@@ -128,7 +125,7 @@ class St7789:
             count    = len(buf),
             src_inc  = True,
             dst_inc  = False,
-            trig_dreq= DMA.DREQ_SPI1_TX
+            trig_dreq= self.dma.DREQ_SPI1_TX
         )
         struct.pack_into('B',self.buf1,0,reg)
         self.cs.value(0)
@@ -190,9 +187,10 @@ class St7789:
         struct.pack_into('>hh', self.buf4, 0, y, y+h-1)
         self.write_register(ST7789_RASET, self.buf4)
 
-    def draw_bitmap_dma(self, x, y, w, h, buf, is_blocking=True):
+    def blit(self, x, y, w, h, buf, is_blocking=True):
         self.set_window(x, y, w, h)
-        self.write_register_dma(ST7789_RAMWR, buf, is_blocking)
+        if self.dma: self.write_register_dma(ST7789_RAMWR, buf, is_blocking)
+        else: self.write_register(ST7789_RAMWR, buf)
 
     def clear(self, color):
         bs=128 # write pixels in chunks; makes the fill much faster
@@ -206,20 +204,6 @@ class St7789:
         for _ in range(npx//bs): self.spi.write(buf)
         for _ in range(npx%bs): self.spi.write(self.buf2)
         self.cs.value(1)
-
-    def __BROKEN_get_id(self):
-        '''Returns device ID; Waveshare 2.8" is 0x52, 3.5" is 0x00.
-        This is all that is given in Waveshare's sources.
-        The 3.5" initialization routine is much different.
-        '''
-        self.cs.value(0)
-        self.dc.value(0)
-        self.buf1[0]=ST7789_RDID3
-        self.spi.write(self.buf1)
-        self.buf1[0]=0x00
-        self.spi.write_readinto(self.buf1,self.buf1)
-        self.cs.value(1)
-        return self.buf1[0]
 
 if __name__=='__main__':
     
@@ -247,16 +231,17 @@ if __name__=='__main__':
             mosi=machine.Pin(LCD_MOSI_PIN,machine.Pin.OUT),
             miso=machine.Pin(LCD_MISO_PIN,machine.Pin.IN)
         )
-
-        lcd = St7789(cs=LCD_CS_PIN,dc=LCD_DC_PIN,bl=LCD_BKL_PIN,spi=spi)
+        dma=rp2_dma.DMA(0)
+        #dma=None
+        lcd = St7789(spi=spi,dma=dma,cs=LCD_CS_PIN,dc=LCD_DC_PIN,bl=LCD_BKL_PIN)
         lcd.clear(0x001F)
         
         # 1/4 screen pixels square with white border red backgorund 
-        w, h = 320//4, 240//4
+        w, h = 320//2, 240//2
         bmp = build_square_buf(w, h)
         
         t0 = time.ticks_us()
-        lcd.draw_bitmap_dma(100, 100, w, h, bmp)
+        lcd.blit(100, 100, w, h, bmp)
         t1 = time.ticks_us()
 
         print("Maximum FPS @24MHz:", 24e6/(320*240*16)) # FPS = F/(W*H*BPP)
@@ -265,8 +250,8 @@ if __name__=='__main__':
         print( "Draw TSC calibration pattern")
         w, h = 10, 10
         bmp = build_square_buf(w, h)
-        lcd.draw_bitmap_dma(50, 50, w, h, bmp)
-        lcd.draw_bitmap_dma(250, 50, w, h, bmp)
-        lcd.draw_bitmap_dma(250, 200, w, h, bmp)
-        lcd.draw_bitmap_dma(50, 200, w, h, bmp)
+        lcd.blit(50, 50, w, h, bmp)
+        lcd.blit(250, 50, w, h, bmp)
+        lcd.blit(250, 200, w, h, bmp)
+        lcd.blit(50, 200, w, h, bmp)
     test_lcd()
