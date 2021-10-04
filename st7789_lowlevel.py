@@ -31,7 +31,7 @@ ST77XX_MADCTL = const(0x36)
 ST77XX_COLMOD = const(0x3A)
 
 ST7789_WRCACE = const(0x55)
-
+ 
 ST77XX_FRMCTR1 = const(0xB1)
 ST77XX_FRMCTR2 = ST7789_PORCTRL = const(0xB2)
 ST77XX_FRMCTR3 = const(0xB3)
@@ -92,30 +92,45 @@ ST77XX_COLOR_MODE_16M = const(0x07)
 # st77xx c driver (for uPy), with simplified init sequence:
 # https://github.com/szampardi/st77xx_mpy
 
+ST77XX_COL_ROW_MODEL_START_ROTMAP={
+    # ST7789
+    (240,320,None):[(0,0),(0,0),(0,0),(0,0)],
+    (240,240,None):[(0,0),(0,0),(0,80),(80,0)],
+    (135,240,None):[(52,40),(40,53),(53,40),(40,52)],
+    # ST7735
+    (128,160,'blacktab'):[(0,0),(0,0),(0,0),(0,0)],
+    (128,160,'redtab'):[(2,1),(1,2),(2,1),(1,2)],
+}
+
 class St77xx(object):
-    def __init__(self, *, cs, dc, bl, spi, rst=None, res=(320,240), rot=1, dma=None):
+    def __init__(self, *, cs, dc, bl, spi, res, suppRes, model=None, suppModel=[], rst=None, rot=1, dma=None, variant=''):
         '''
         * *cs*: chip select pin (= slave select, SS)
         * *dc*: data/command pin
         * *bl*: backlight PWM pin
         * *rst*: optional reset pin
-        * *res*: resolution tuple; greater value always comes first
-        * *rot*: display orientation (0: landscape, 1: portrait, 2: reverse landscape, 3: reverse portrait)
+        * *res*: resolution tuple; (width,height) with zero rotation
+        * *rot*: display orientation (0: portrait, 1: landscape, 2: inverted protrait, 3: inverted landscape)
         '''
         self.buf1 = bytearray(1)
         self.buf2 = bytearray(2)
         self.buf4 = bytearray(4)
-
-        self.cs,self.dc,self.bl,self.rst = [(machine.Pin(p,machine.Pin.OUT) if isinstance(p,int) else p) for p in (cs,dc,bl,rst)]
+        
+        self.cs,self.dc,self.bl,self.rst=[(machine.Pin(p,machine.Pin.OUT) if isinstance(p,int) else p) for p in (cs,dc,bl,rst)]
         self.bl.value(1)
         self.bl=machine.PWM(self.bl)
-        self.width = (res[0] if rot%2 else res[1])
-        self.height = (res[1] if rot%2 else res[0])
-        self.rot = rot
+        self.rot=rot        
+        self.width,self.height=(0,0) # set in apply_rotation
 
-        self.dma = dma
-        self.spi = spi
-        self.config()
+        if res not in suppRes: raise ValueError('Unsupported resolution %s; the driver supports: %s.'%(str(res),', '.join(str(r) for r in suppRes)))
+        if suppModel and model not in suppModel: raise ValueError('Unsupported model %s; the driver supports: %s.'%(str(model),', '.join(str(r) for r in suppModel)))
+
+        self.res=res
+        self.model=model
+         
+        self.dma=dma
+        self.spi=spi
+        self.hard_reset()
 
     def off(self):
         self.bl.value(0)
@@ -123,16 +138,22 @@ class St77xx(object):
         if self.rst:
             for v in (1,0,1):
                 self.rst.value(v)
-                time.sleep(.5)
-            time.sleep(.5)
+                time.sleep(.2)
+            time.sleep(.2)
         self.config()
     def set_backlight(self,percent):
         self.bl.duty_u16(percent*655)
     def set_window(self, x, y, w, h):
-        struct.pack_into('>hh', self.buf4, 0, x, x+w-1)
+        c0,r0=ST77XX_COL_ROW_MODEL_START_ROTMAP[self.res[0],self.res[1],self.model][self.rot%4]
+        struct.pack_into('>hh', self.buf4, 0, c0+x, c0+x+w-1)
         self.write_register(ST77XX_CASET, self.buf4)
-        struct.pack_into('>hh', self.buf4, 0, y, y+h-1)
+        struct.pack_into('>hh', self.buf4, 0, r0+y, r0+y+h-1)
         self.write_register(ST77XX_RASET, self.buf4)
+    def apply_rotation(self,rot):
+        self.rot=rot
+        if (self.rot%2)==0: self.width,self.height=self.res
+        else: self.height,self.width=self.res
+        self.write_register(ST77XX_MADCTL,bytes([ST77XX_MADCTL_BGR | ST77XX_MADCTL_ROTS[self.rot%4]]))
 
     def blit(self, x, y, w, h, buf, is_blocking=True):
         self.set_window(x, y, w, h)
@@ -206,19 +227,17 @@ class St77xx(object):
 
         
 class St7735(St77xx):
-    '''There are many variants of ST7735-based LCDs, none of them seem to be working yet'''
-    def __init__(self,res,**kw):
-        suppRes=[(160,128),]
-        if res not in suppRes: raise ValueError('Unsupported resolution %s; the driver currently supports %s.'%(str(res,', '.join(str(r) for r in suppRes))))
-        super().__init__(res=res,**kw)
+    '''There are several ST7735-based LCD models, we only tested the blacktab model really.'''
+    def __init__(self,res,model='greentab',**kw):
+        super().__init__(res=res,suppRes=[(128,160),],model=model,suppModel=['greentab','redtab','blacktab'],**kw)
     def config(self):
         # mostly from here
         # https://github.com/stechiez/raspberrypi-pico/blob/main/pico_st7735/st7735/ST7735.py
-        # the "blue version" only
+        
         init7735r=[
             # see here for explanations: https://github.com/adafruit/Adafruit-ST7735-Library/blob/master/Adafruit_ST7735.cpp
-            (ST77XX_SWRESET, None, 150),
-            (ST77XX_SLPOUT, None, 255),
+            (ST77XX_SWRESET,None, 50),
+            (ST77XX_SLPOUT, None, 100),
             (ST77XX_FRMCTR1,b'\x01\x2c\x2d'),
             (ST77XX_FRMCTR2,b'\x01\x2c\x2d'),
             (ST77XX_FRMCTR3,b'\x01\x2c\x2d\x01\x2c\x2d'),
@@ -230,16 +249,18 @@ class St7735(St77xx):
             (ST7735_PWCTR5,b'\x8a\xee'),
             (ST7735_VMCTR1,b'\x0e'),
             (ST77XX_INVOFF,None),
-            (ST77XX_MADCTL,bytes([ST77XX_MADCTL_ROTS[self.rot%4]])),    
+            # ST77XX_MADCTL: do later, depending on rotation
             (ST77XX_COLMOD,bytes([ST77XX_COLOR_MODE_65K | ST77XX_COLOR_MODE_16BIT])),
             (ST77XX_CASET,bytes([0x00,0x00,0x00,0x7f])),
             (ST77XX_RASET,bytes([0x00,0x00,0x00,0x9f])),
-            # blacktab only
-            (ST77XX_MADCTL,b'\xc0'),
-            # TODO: gamma adjustment
+            # gamma adjustment: Waveshare values
+            (ST7789_GMCTRP1,b'\x0f\x1a\x0f\x18\x2f\x28\x20\x22\x1f\x1b\x23\x37\x00\x07\x02\x10'),
+            (ST7789_GMCTRN1,b'\x0f\x1b\x0f\x17\x33\x2c\x29\x2e\x30\x30\x39\x3f\x00\x07\x03\x10'),
             (ST77XX_NORON, None, 10),
-            (ST77XX_DISPON, None,100)
+            (ST77XX_DISPON, None,100),
         ]
+        
+        # the "blue version" only (not tested)
         init7735=[
             # swreset
             (ST77XX_SWRESET, None, 50),
@@ -258,7 +279,7 @@ class St7735(St77xx):
             (ST7735_PWCTR6,b'\b11\b15'),
             # (ST77XX_GMCTRP1,b'\
             ## memory access direction
-            #(ST77XX_MADCTL, bytes([ST77XX_MADCTL_ROTS[self.rot%4]]), 0),    
+            # (ST77XX_MADCTL, bytes([ST77XX_MADCTL_ROTS[self.rot%4]]), 0),    
             # inverted on (?)
             #(ST77XX_INVON, None, 10),
             # normal display on
@@ -266,14 +287,17 @@ class St7735(St77xx):
             # display on
             (ST77XX_DISPON, None,100)
         ]
-        self._run_seq(init7735r)
+        if self.model in ('redtab','blacktab'): self._run_seq(init7735r)
+        else:
+            print('Warning: the greentab model was never properly tested')
+            self._run_seq(init7735)
+        # this applies ST77XX_MADCTL
+        self.apply_rotation(self.rot)
 
 
 class St7789(St77xx):
     def __init__(self,res,**kw):
-        suppRes=[(320,240),]
-        if res not in suppRes: raise ValueError('Unsupported resolution %s; the driver currently supports %s.'%(str(res,', '.join(str(r) for r in suppRes))))
-        super().__init__(res=res,**kw)
+        super().__init__(res=res,suppRes=[(240,320),],model=None,suppModel=None,**kw)
     def config(self):
         init7789=[
             # out of sleep mode
@@ -306,63 +330,69 @@ class St7789(St77xx):
             (ST77XX_DISPON, None,100),        
         ]
         self._run_seq(init7789)
+        self.apply_rotation(self.rot)
 
 
 if __name__=='__main__':
 
-    LCD_RST_PIN=15 # [unused]
-    LCD_DC_PIN=8 # jgpeiro: 14
-    LCD_CS_PIN=9
-    LCD_CLK_PIN=10
-    LCD_BKL_PIN=13 #jgpeiro: 15
-    LCD_MOSI_PIN=11
-    LCD_MISO_PIN=12
 
-    def build_square_buf(w, h, inner=[0x00,0x00]):
+    def build_rect_buf(w, h, inner=[0x00,0x00]):
         top = b"\xFF\xFF"*w
-        body=(b"\xFF\xFF" + bytes(inner)*(w-2) + b"\xFF\xFF")*(h-2)
+        body=(b"\xFF\xFF\xFF" + bytes(inner)*(w-3) + b"\xFF\xFF\xFF")*(h-3)
         bot = b"\xFF\xFF"*w
         return top + body + bot
 
     def test_lcd(lcd):
         # lcd.hard_reset()
         lcd.set_backlight(30)
+        for rot in (0,1,2,3):
+            lcd.apply_rotation(rot)
 
-        lcd.clear(0x0000)    
-        # 1/4 screen pixels square with white border red backgorund 
-        w, h = lcd.width//4, lcd.height//4
-        bmp = build_square_buf(w, h, [0x03,0x03])
+            lcd.clear(0x0000)    
+            # 1/4 screen pixels square with white border red backgorund 
+            w, h = lcd.width//4, lcd.height//8
+            bmp = build_rect_buf(w, h, [0x03,0x03])
+            t0 = time.ticks_us()
+            lcd.blit(w, h, w, h, bmp)
+            t1 = time.ticks_us()
+            bmp=build_rect_buf(lcd.width,lcd.height//20,[0x09,0x09])
+            lcd.blit(0,0,lcd.width,lcd.height//20,bmp)
 
-        t0 = time.ticks_us()
-        lcd.blit(60, 60, w, h, bmp)
-        t1 = time.ticks_us()
+            print("Maximum FPS @24MHz:", 24e6/(320*240*16)) # FPS = F/(W*H*BPP)
+            print("Achieved FPS:", 1/(16*(t1-t0)*1e-6))       # Note: Test only draws 1/16 of the sreen area
 
-        print("Maximum FPS @24MHz:", 24e6/(320*240*16)) # FPS = F/(W*H*BPP)
-        print("Achieved FPS:", 1/(16*(t1-t0)*1e-6))       # Note: Test only draws 1/16 of the sreen area
-
-        print( "Draw TSC calibration pattern")
-        w, h = 15, 15
-        bmp = build_square_buf(w, h, [0x00,0x00])
-        lcd.blit(50, 50, w, h, bmp)
-        lcd.blit(250, 50, w, h, bmp)
-        lcd.blit(250, 200, w, h, bmp)
-        lcd.blit(50, 200, w, h, bmp)
-        for p in (20,100,80,50,10,0):
+            print( "Draw TSC calibration pattern")
+            w,h,wu,hu=lcd.width//10,lcd.height//10,lcd.width//5,lcd.height//5
+            bmp = build_rect_buf(w, h, [0xa0,0xf0])
+            lcd.blit(wu,hu,w,h,bmp)
+            lcd.blit(4*wu,hu,w,h,bmp)
+            lcd.blit(4*wu,4*hu,w,h,bmp)
+            lcd.blit(wu,4*hu,w,h,bmp)
+            time.sleep(1)
+    
+        for p in (20,100,80,50,10,60):
             lcd.set_backlight(p)
-            time.sleep(.5)
+            time.sleep(.3)
 
     spi = machine.SPI(
         1, 
-        baudrate=20_000_000, 
+        baudrate=24_000_000, 
         polarity=0,
         phase=0,
-        sck=machine.Pin(LCD_CLK_PIN,machine.Pin.OUT),
-        mosi=machine.Pin(LCD_MOSI_PIN,machine.Pin.OUT),
-        miso=machine.Pin(LCD_MISO_PIN,machine.Pin.IN)
+        sck=machine.Pin(10,machine.Pin.OUT),
+        mosi=machine.Pin(11,machine.Pin.OUT),
+        miso=machine.Pin(12,machine.Pin.IN)
     )
     dma=rp2_dma.DMA(0)
+    # dma=None
 
-    lcd7789=St7789(rot=1,res=(320,240),spi=spi,dma=dma,cs=LCD_CS_PIN,dc=LCD_DC_PIN,bl=LCD_BKL_PIN,rst=LCD_RST_PIN)
-    test_lcd(lcd=lcd7789)
-    #lcd7735=St7735(rot=1,res=(160,128),spi=spi,dma=None,rst=16,dc=17,cs=18,bl=19)
-    #test_lcd(lcd=lcd7735)
+    # Waveshare Pi Pico 2.8 LCD https://www.waveshare.com/Pico-ResTouch-LCD-2.8.htm
+    waveshare_28_lcd=St7789(rot=0,res=(240,320),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=15)
+    # Waveshare Pi Pico 1.8 LCD https://www.waveshare.com/wiki/Pico-LCD-1.8
+    # (not sure if this is redtab, but the driver works; someone with access to more hardware can adjust perhaps)
+    waveshare_18_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=12,model='redtab')
+    # no-name variant which arduino library calls blacktab  (IIRC)
+    noname_177_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=None,rst=16,dc=17,cs=18,bl=19,model='blacktab')
+    
+    test_lcd(lcd=waveshare_18_lcd)
+    test_lcd(lcd=noname_177_lcd)
