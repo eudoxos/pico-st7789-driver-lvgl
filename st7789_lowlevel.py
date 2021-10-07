@@ -207,6 +207,7 @@ class St77xx(object):
         if is_blocking: self.wait_dma()
 
     def wait_dma(self):
+        if self.dma is None: return
         while self.dma.is_busy(): pass
         self.dma.disable()
         # wait to send last byte. It should take < 1uS @ 10MHz 
@@ -368,11 +369,11 @@ if __name__=='__main__':
             lcd.blit(4*wu,hu,w,h,bmp)
             lcd.blit(4*wu,4*hu,w,h,bmp)
             lcd.blit(wu,4*hu,w,h,bmp)
-            time.sleep(1)
+            time.sleep(.5)
     
         for p in (20,100,80,50,10,60):
             lcd.set_backlight(p)
-            time.sleep(.3)
+            time.sleep(.1)
 
     spi = machine.SPI(
         1, 
@@ -390,9 +391,10 @@ if __name__=='__main__':
     waveshare_28_lcd=St7789(rot=0,res=(240,320),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=15)
     # Waveshare Pi Pico 1.8 LCD https://www.waveshare.com/wiki/Pico-LCD-1.8
     # (not sure if this is redtab, but the driver works; someone with access to more hardware can adjust perhaps)
-    waveshare_18_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=12,model='redtab')
+    #waveshare_18_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=12,model='redtab')
     # no-name variant which arduino library calls blacktab  (IIRC)
-    noname_177_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=None,rst=16,dc=17,cs=18,bl=19,model='blacktab')
+    #noname_177_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=None,cs=9,dc=8,bl=13,rst=12,model='blacktab')
+    # rst=16,dc=17,cs=18,bl=19
     
-    test_lcd(lcd=waveshare_18_lcd)
-    test_lcd(lcd=noname_177_lcd)
+    test_lcd(lcd=waveshare_28_lcd)
+    #test_lcd(lcd=noname_177_lcd)
