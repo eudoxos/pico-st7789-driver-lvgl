@@ -31,7 +31,7 @@ ST77XX_MADCTL = const(0x36)
 ST77XX_COLMOD = const(0x3A)
 
 ST7789_WRCACE = const(0x55)
- 
+
 ST77XX_FRMCTR1 = const(0xB1)
 ST77XX_FRMCTR2 = ST7789_PORCTRL = const(0xB2)
 ST77XX_FRMCTR3 = const(0xB3)
@@ -115,11 +115,11 @@ class St77xx(object):
         self.buf1 = bytearray(1)
         self.buf2 = bytearray(2)
         self.buf4 = bytearray(4)
-        
+
         self.cs,self.dc,self.bl,self.rst=[(machine.Pin(p,machine.Pin.OUT) if isinstance(p,int) else p) for p in (cs,dc,bl,rst)]
         self.bl.value(1)
         self.bl=machine.PWM(self.bl)
-        self.rot=rot        
+        self.rot=rot
         self.width,self.height=(0,0) # set in apply_rotation
 
         if res not in suppRes: raise ValueError('Unsupported resolution %s; the driver supports: %s.'%(str(res),', '.join(str(r) for r in suppRes)))
@@ -127,7 +127,7 @@ class St77xx(object):
 
         self.res=res
         self.model=model
-         
+
         self.dma=dma
         self.spi=spi
         self.hard_reset()
@@ -168,11 +168,11 @@ class St77xx(object):
         self.set_window(0, 0, self.width, self.height)
         self.write_register(ST77XX_RAMWR, None)
         self.cs.value(0)
-        self.dc.value(1)    
+        self.dc.value(1)
         for _ in range(npx//bs): self.spi.write(buf)
         for _ in range(npx%bs): self.spi.write(self.buf2)
         self.cs.value(1)
-        
+
     def write_register(self, reg, buf=None):
         struct.pack_into('B', self.buf1, 0, reg)
         self.cs.value(0)
@@ -210,7 +210,7 @@ class St77xx(object):
         if self.dma is None: return
         while self.dma.is_busy(): pass
         self.dma.disable()
-        # wait to send last byte. It should take < 1uS @ 10MHz 
+        # wait to send last byte. It should take < 1uS @ 10MHz
         time.sleep_us(1)
         self.cs.value(1)
 
@@ -226,7 +226,7 @@ class St77xx(object):
             self.write_register(reg,data)
             if delay>0: time.sleep_ms(delay)
 
-        
+
 class St7735(St77xx):
     '''There are several ST7735-based LCD models, we only tested the blacktab model really.'''
     def __init__(self,res,model='greentab',**kw):
@@ -234,7 +234,7 @@ class St7735(St77xx):
     def config(self):
         # mostly from here
         # https://github.com/stechiez/raspberrypi-pico/blob/main/pico_st7735/st7735/ST7735.py
-        
+
         init7735r=[
             # see here for explanations: https://github.com/adafruit/Adafruit-ST7735-Library/blob/master/Adafruit_ST7735.cpp
             (ST77XX_SWRESET,None, 50),
@@ -260,7 +260,7 @@ class St7735(St77xx):
             (ST77XX_NORON, None, 10),
             (ST77XX_DISPON, None,100),
         ]
-        
+
         # the "blue version" only (not tested)
         init7735=[
             # swreset
@@ -280,7 +280,7 @@ class St7735(St77xx):
             (ST7735_PWCTR6,b'\b11\b15'),
             # (ST77XX_GMCTRP1,b'\
             ## memory access direction
-            # (ST77XX_MADCTL, bytes([ST77XX_MADCTL_ROTS[self.rot%4]]), 0),    
+            # (ST77XX_MADCTL, bytes([ST77XX_MADCTL_ROTS[self.rot%4]]), 0),
             # inverted on (?)
             #(ST77XX_INVON, None, 10),
             # normal display on
@@ -302,21 +302,21 @@ class St7789(St77xx):
     def config(self):
         init7789=[
             # out of sleep mode
-            (ST77XX_SLPOUT, None, 100),     
-            # memory access direction
-            (ST77XX_MADCTL, bytes([ST77XX_MADCTL_ROTS[self.rot%4]])),    
+            (ST77XX_SLPOUT, None, 100),
+            # memory access direction (this is set again in apply_rotation, is that okay?)
+            (ST77XX_MADCTL, bytes([ST77XX_MADCTL_BGR | ST77XX_MADCTL_ROTS[self.rot%4]])),
             # RGB565
             (ST77XX_COLMOD, bytes([ST77XX_COLOR_MODE_65K | ST77XX_COLOR_MODE_16BIT])),
             # front/back porch setting in normal/idle/partial modes; 3rd byte (PSEN) 0x00 = disabled
-            (ST7789_PORCTRL, b"\x0C\x0C\x00\x33\x33"), 
+            (ST7789_PORCTRL, b"\x0C\x0C\x00\x33\x33"),
             # VGH=14.06V, VGL=-8.87V [Adafruit: 0x14]
             (ST7789_GCTRL, b"\x35"),
             # [Adafruit: missing]
             (ST77XX_DISPOFF, b"\x28"),
             # power control [Adafruit: 0x2c]
             (ST7789_LCMCTRL, b"\x3C"),
-            # power control (set VDV and VRD by register write), write VRH and VDV 
-            (ST7789_VDVVRHEN, b"\x01"),(ST7789_VRHS, b"\x0B"),(ST7789_VDVS, b"\x20"),      
+            # power control (set VDV and VRD by register write), write VRH and VDV
+            (ST7789_VDVVRHEN, b"\x01"),(ST7789_VRHS, b"\x0B"),(ST7789_VDVS, b"\x20"),
             # frame rate 60Hz
             (ST7789_FRCTRL2, b"\x0F"),
             # power control: AVDD=6.6V, AVCL=-4.8V, VDS=2.4V
@@ -328,7 +328,9 @@ class St7789(St77xx):
             # content adaptive brightness control and color enhancement: color enhancement on, high enhancement
             (ST7789_WRCACE, bytes([0b1011_0000])),
             # display on
-            (ST77XX_DISPON, None,100),        
+            (ST77XX_DISPON, None, 100),
+            ## FIXME: needs out of sleep mode AGAIN, otherwise will stay bleck the first time on?
+            (ST77XX_SLPOUT, None, 100),
         ]
         self._run_seq(init7789)
         self.apply_rotation(self.rot)
@@ -349,35 +351,35 @@ if __name__=='__main__':
         for rot in (0,1,2,3):
             lcd.apply_rotation(rot)
 
-            lcd.clear(0x0000)    
-            # 1/4 screen pixels square with white border red backgorund 
-            w, h = lcd.width//4, lcd.height//8
-            bmp = build_rect_buf(w, h, [0x03,0x03])
-            t0 = time.ticks_us()
-            lcd.blit(w, h, w, h, bmp)
-            t1 = time.ticks_us()
+            lcd.clear(0x0000)
+            # 1/4 screen pixels square with white border red backgorund
+            w,h=lcd.width//4,lcd.height//8
+            bmp=build_rect_buf(w,h,[0x03,0x03])
+            t0=time.ticks_us()
+            lcd.blit(w,h,w,h,bmp)
+            t1=time.ticks_us()
             bmp=build_rect_buf(lcd.width,lcd.height//20,[0x09,0x09])
             lcd.blit(0,0,lcd.width,lcd.height//20,bmp)
 
-            print("Maximum FPS @24MHz:", 24e6/(320*240*16)) # FPS = F/(W*H*BPP)
-            print("Achieved FPS:", 1/(16*(t1-t0)*1e-6))       # Note: Test only draws 1/16 of the sreen area
+            print("Maximum FPS @24MHz:",24e6/(320*240*16)) # FPS = F/(W*H*BPP)
+            print("Achieved FPS:",1/(16*(t1-t0)*1e-6))     # Note: Test only draws 1/16 of the sreen area
 
             print( "Draw TSC calibration pattern")
             w,h,wu,hu=lcd.width//10,lcd.height//10,lcd.width//5,lcd.height//5
-            bmp = build_rect_buf(w, h, [0xa0,0xf0])
+            bmp=build_rect_buf(w,h,[0xa0,0xf0])
             lcd.blit(wu,hu,w,h,bmp)
             lcd.blit(4*wu,hu,w,h,bmp)
             lcd.blit(4*wu,4*hu,w,h,bmp)
             lcd.blit(wu,4*hu,w,h,bmp)
             time.sleep(.5)
-    
+
         for p in (20,100,80,50,10,60):
             lcd.set_backlight(p)
             time.sleep(.1)
 
-    spi = machine.SPI(
-        1, 
-        baudrate=24_000_000, 
+    spi=machine.SPI(
+        1,
+        baudrate=24_000_000,
         polarity=0,
         phase=0,
         sck=machine.Pin(10,machine.Pin.OUT),
@@ -387,14 +389,16 @@ if __name__=='__main__':
     dma=rp2_dma.DMA(0)
     # dma=None
 
-    # Waveshare Pi Pico 2.8 LCD https://www.waveshare.com/Pico-ResTouch-LCD-2.8.htm
-    waveshare_28_lcd=St7789(rot=0,res=(240,320),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=15)
-    # Waveshare Pi Pico 1.8 LCD https://www.waveshare.com/wiki/Pico-LCD-1.8
-    # (not sure if this is redtab, but the driver works; someone with access to more hardware can adjust perhaps)
-    #waveshare_18_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=12,model='redtab')
-    # no-name variant which arduino library calls blacktab  (IIRC)
-    #noname_177_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=None,cs=9,dc=8,bl=13,rst=12,model='blacktab')
-    # rst=16,dc=17,cs=18,bl=19
-    
-    test_lcd(lcd=waveshare_28_lcd)
-    #test_lcd(lcd=noname_177_lcd)
+    if 1:
+        # Waveshare Pi Pico 2.8 LCD https://www.waveshare.com/Pico-ResTouch-LCD-2.8.htm
+        waveshare_28_lcd=St7789(rot=0,res=(240,320),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=15)
+        test_lcd(lcd=waveshare_28_lcd)
+    if 0:
+        # Waveshare Pi Pico 1.8 LCD https://www.waveshare.com/wiki/Pico-LCD-1.8
+        # (not sure if this is redtab, but the driver works; someone with access to more hardware can adjust perhaps)
+        waveshare_18_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=12,model='redtab')
+        test_lcd(lcd=waveshare_18_lcd)
+    if 0:
+        # no-name variant which arduino library calls blacktab  (IIRC)
+        noname_177_lcd=St7735(rot=0,res=(128,160),spi=spi,dma=None,cs=9,dc=8,bl=13,rst=12,model='blacktab')
+        test_lcd(lcd=noname_177_lcd)
