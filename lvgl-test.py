@@ -19,8 +19,6 @@ spi=machine.SPI(
 dma=None
 
 lcd=St7789(rot=3,res=(240,320),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=15)
-time.sleep(.1)
-lcd=St7789(rot=3,res=(240,320),spi=spi,dma=dma,cs=9,dc=8,bl=13,rst=15)
 lcd.set_backlight(30)
 touch=Xpt2046(spi=spi,cs=16,rot=1)
 
@@ -29,26 +27,17 @@ import machine
 import lvgl as lv
 import sys
 
-print("lv.init()")
 lv.init()
-print("disp_buf_t.init()")
-HRES,VRES=lcd.width,lcd.height
-# set fb2 to None to disable double-buffering
-fb1,fb2=bytearray(HRES*2*32),bytearray(HRES*2*32)
 disp_draw_buf=lv.disp_draw_buf_t()
-disp_draw_buf.init(fb1,fb2,len(fb1)//lv.color_t.__SIZE__)
+# set fb2 to None to disable double-buffering
+disp_draw_buf.init(fb1:=bytearray(lcd.width*2*32),bytearray(lcd.width*2*32),len(fb1)//lv.color_t.__SIZE__)
 if lv.COLOR.DEPTH!=16 or not lv.COLOR_16.SWAP: raise RuntimeError(f'LVGL *must* be compiled with 16bit color depth and swapped bytes (current: lv.COLOR.DEPTH={lv.COLOR.DEPTH}, lv.COLOR_16.SWAP={lv.COLOR_16.SWAP})')
 
-is_fb1=True
 def disp_drv_flush_cb(disp_drv,area,color):
-    global is_fb1
     print(f"({area.x1},{area.y1}..{area.x2},{area.y2})")
-    fb=memoryview(fb1 if (is_fb1 or fb2 is None) else fb2)
-    is_fb1=not is_fb1
     lcd.wait_dma() # wait if not yet done
     # blit in background
-    # FIXME: check that data have the correct size (LV_COLOR_DEPTH)
-    lcd.blit(area.x1,area.y1,w:=(area.x2-area.x1+1),h:=(area.y2-area.y1+1),fb[0:2*w*h],is_blocking=True) # is_blocking=False)
+    lcd.blit(area.x1,area.y1,w:=(area.x2-area.x1+1),h:=(area.y2-area.y1+1),disp_drv.draw_buf.buf_act.__dereference__(2*w*h),is_blocking=False) # is_blocking=False)
     disp_drv.flush_ready()
     
 print('driver')
